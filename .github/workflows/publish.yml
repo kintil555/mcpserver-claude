@@ -1,8 +1,11 @@
 name: Publish to npm
 
 on:
-  release:
-    types: [published]
+  # Publish otomatis sudah terjadi di build.yml (job auto-release), langsung
+  # setelah tag & GitHub Release dibuat, di job yang sama. Workflow ini
+  # dibiarkan sebagai tombol manual cadangan lewat tab Actions kalau perlu
+  # publish ulang versi tertentu.
+  workflow_dispatch:
 
 jobs:
   publish:
