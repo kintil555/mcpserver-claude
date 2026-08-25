@@ -133,6 +133,8 @@ jobs:
     name: Build standalone .exe (Windows)
     needs: auto-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
