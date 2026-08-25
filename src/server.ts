@@ -17,6 +17,7 @@ import {
   workspacePathFor,
   removeWorkspace,
 } from "./git.js";
+import { GitHubPusher } from "./github.js";
 
 // --- Skema input tiap tool -------------------------------------------------
 
@@ -263,7 +264,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "github_whoami": {
         const { token, host } = getToken();
-        const { GitHubPusher } = await import("./github.js");
         const pusher = new GitHubPusher(token, host);
         const info = await pusher.whoAmI();
         return {

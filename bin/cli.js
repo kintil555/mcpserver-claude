@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { spawn } from "node:child_process";
 import { saveConfig, getConfigPath, configExists, loadConfig, deleteConfigToken } from "../dist/config.js";
 import { GitHubPusher } from "../dist/github.js";
 // server.js self-guards on process.argv[2] === "start" (see src/server.ts),
@@ -38,7 +39,6 @@ async function promptHidden(question) {
 }
 
 async function checkGitInstalled() {
-  const { spawn } = await import("node:child_process");
   return new Promise((resolve) => {
     const child = spawn("git", ["--version"], { windowsHide: true });
     child.on("error", () => resolve(false));
