@@ -1,6 +1,6 @@
 {
   "name": "@kintil555/mcp-github-push",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "MCP server yang menyimpan GitHub PAT secara lokal dan melakukan git clone/commit/push sungguhan di komputer kamu — Claude cukup kirim diff/patch lewat tool call, bukan isi file utuh, dan token tidak pernah lewat chat.",
   "type": "module",
   "license": "MIT",
