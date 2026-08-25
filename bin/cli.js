@@ -37,8 +37,27 @@ async function promptHidden(question) {
   });
 }
 
+async function checkGitInstalled() {
+  const { spawn } = await import("node:child_process");
+  return new Promise((resolve) => {
+    const child = spawn("git", ["--version"], { windowsHide: true });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
 async function runSetup() {
   console.log("=== Setup mcp-github-push ===\n");
+
+  const hasGit = await checkGitInstalled();
+  if (!hasGit) {
+    console.error(
+      "git tidak ditemukan di PATH. Server ini butuh git CLI terinstall untuk clone/commit/push.\n" +
+        "Install dulu dari https://git-scm.com/downloads lalu jalankan setup ini lagi."
+    );
+    process.exit(1);
+  }
+
   console.log("Buat Personal Access Token (PAT) di:");
   console.log("  https://github.com/settings/tokens?type=beta");
   console.log('Scope minimal: "Contents" (read & write) pada repo yang ingin dipakai.\n');
@@ -63,12 +82,26 @@ async function runSetup() {
     console.log(`Token valid. Login sebagai: ${info.login}`);
     console.log(`Scope: ${info.scopes.join(", ") || "(fine-grained token, scope tidak muncul di header)"}`);
 
-    saveConfig({
-      githubToken: token,
-      githubHost: baseUrl,
-      createdAt: new Date().toISOString(),
-    });
-    console.log(`\nToken tersimpan di: ${getConfigPath()} (permission 600, hanya bisa dibaca kamu)`);
+    try {
+      saveConfig({
+        githubToken: token,
+        githubHost: baseUrl,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (saveErr) {
+      console.error(`\nGagal menyimpan config ke ${getConfigPath()}: ${saveErr.message}`);
+      console.error("Cek apakah folder di atas bisa ditulis (permission) lalu coba lagi.");
+      process.exit(1);
+    }
+
+    // Verifikasi tersimpan dengan baca ulang -- supaya user tahu pasti kalau ada masalah.
+    const reloaded = loadConfig();
+    if (reloaded.githubToken !== token) {
+      console.error(`\nConfig tersimpan tapi isinya tidak sesuai saat dibaca ulang. Coba jalankan setup lagi.`);
+      process.exit(1);
+    }
+
+    console.log(`\nToken tersimpan & terverifikasi di: ${getConfigPath()}`);
     console.log("\nSetup selesai. Sekarang tambahkan MCP server ini ke config client kamu, contoh:");
     console.log(`
 {

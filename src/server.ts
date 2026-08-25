@@ -7,77 +7,92 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
-import { GitHubPusher, type PushFile } from "./github.js";
+import {
+  ensureWorkspace,
+  getStatus,
+  getDiff,
+  applyPatch,
+  commitAll,
+  push,
+  workspacePathFor,
+  removeWorkspace,
+} from "./git.js";
 
 // --- Skema input tiap tool -------------------------------------------------
 
-const PushFileSchema = z.object({
-  path: z.string().describe("Path relatif file dari root repo, mis. 'src/index.ts'"),
-  content: z.string().optional().describe("Isi file (wajib kecuali delete=true)"),
-  delete: z.boolean().optional().describe("Set true untuk menghapus file ini dari repo"),
-});
-
-const PreparePushSchema = z.object({
+const RepoRefSchema = z.object({
   owner: z.string().describe("Pemilik repo (username/org GitHub)"),
   repo: z.string().describe("Nama repo"),
-  branch: z.string().default("main").describe("Branch tujuan"),
-  files: z.array(PushFileSchema).min(1).describe("Daftar file yang akan diubah"),
-  commitMessage: z.string().describe("Pesan commit"),
+  branch: z.string().default("main").describe("Branch kerja"),
 });
 
-const ConfirmPushSchema = PreparePushSchema.extend({
+const ApplyPatchSchema = RepoRefSchema.extend({
+  patch: z
+    .string()
+    .describe(
+      "Isi unified diff (hasil `git diff` dari sandbox Claude). Bisa mencakup banyak file sekaligus."
+    ),
+});
+
+const PushSchema = RepoRefSchema.extend({
+  commitMessage: z.string().describe("Pesan commit"),
   confirmed: z
     .literal(true)
     .describe("Wajib true — menandakan user sudah menyetujui push ini secara eksplisit"),
-  createBranchIfMissing: z.boolean().optional().default(false),
-});
-
-const RepoRefSchema = z.object({
-  owner: z.string(),
-  repo: z.string(),
-});
-
-const CreateRepoSchema = z.object({
-  name: z.string(),
-  private: z.boolean().optional().default(true),
-  description: z.string().optional(),
-});
-
-const ReadFileSchema = z.object({
-  owner: z.string(),
-  repo: z.string(),
-  path: z.string(),
-  ref: z.string().optional(),
 });
 
 // --- Server -----------------------------------------------------------------
 
 const server = new Server(
-  { name: "mcp-github-push", version: "1.0.0" },
+  { name: "mcp-github-push", version: "2.0.0" },
   { capabilities: { tools: {} } }
 );
 
-function getPusher(): GitHubPusher {
+function getToken(): { token: string; host?: string } {
   const cfg = loadConfig();
-  if (!cfg.githubToken) {
-    throw new Error(
-      "Token GitHub belum di-set. Jalankan `npx @kintil555/mcp-github-push setup` di terminal."
-    );
-  }
-  return new GitHubPusher(cfg.githubToken, cfg.githubHost);
+  return { token: cfg.githubToken, host: cfg.githubHost };
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: "github_whoami",
+      name: "git_sync_workspace",
       description:
-        "Cek token GitHub yang terpasang valid atau tidak, dan tampilkan username serta scope token.",
-      inputSchema: { type: "object", properties: {} },
+        "Siapkan workspace lokal untuk owner/repo (clone kalau belum ada, atau fetch + checkout " +
+        "branch terbaru kalau sudah ada). Panggil ini SEBELUM git_apply_patch, supaya workspace " +
+        "server ini punya salinan repo yang sinkron dengan remote sebelum patch diterapkan.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          branch: { type: "string" },
+        },
+        required: ["owner", "repo"],
+      },
     },
     {
-      name: "github_repo_exists",
-      description: "Cek apakah sebuah repository GitHub sudah ada.",
+      name: "git_apply_patch",
+      description:
+        "Terapkan unified diff (hasil `git diff` yang dihasilkan Claude di sandboxnya sendiri) ke " +
+        "workspace lokal server ini. Jauh lebih ringkas daripada mengirim isi file utuh satu-satu, " +
+        "terutama untuk perubahan banyak file. Panggil git_sync_workspace dulu sebelum ini.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          branch: { type: "string" },
+          patch: { type: "string" },
+        },
+        required: ["owner", "repo", "patch"],
+      },
+    },
+    {
+      name: "git_status",
+      description:
+        "Lihat ringkasan perubahan yang sudah diterapkan ke workspace lokal (file apa saja yang " +
+        "berubah/ditambah/dihapus), belum di-commit atau di-push. Gunakan untuk verifikasi sebelum push.",
       inputSchema: {
         type: "object",
         properties: { owner: { type: "string" }, repo: { type: "string" } },
@@ -85,91 +100,51 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: "github_create_repo",
-      description: "Buat repository GitHub baru milik user yang terautentikasi.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          private: { type: "boolean" },
-          description: { type: "string" },
-        },
-        required: ["name"],
-      },
-    },
-    {
-      name: "github_read_file",
-      description: "Baca isi satu file dari repo GitHub (untuk cek isi sebelum overwrite).",
-      inputSchema: {
-        type: "object",
-        properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          path: { type: "string" },
-          ref: { type: "string" },
-        },
-        required: ["owner", "repo", "path"],
-      },
-    },
-    {
-      name: "github_preview_push",
+      name: "git_diff",
       description:
-        "WAJIB dipanggil SEBELUM github_push_confirmed. Tampilkan ringkasan perubahan " +
-        "(file mana yang akan ditambah/diubah/dihapus, ke repo & branch mana) supaya user bisa " +
-        "meninjau dan menyetujui sebelum benar-benar push. Tool ini TIDAK mengubah apa pun di GitHub.",
+        "Tampilkan diff lengkap (working tree vs HEAD) di workspace lokal. Gunakan untuk preview " +
+        "detail perubahan sebelum push.",
+      inputSchema: {
+        type: "object",
+        properties: { owner: { type: "string" }, repo: { type: "string" } },
+        required: ["owner", "repo"],
+      },
+    },
+    {
+      name: "git_push",
+      description:
+        "Commit semua perubahan di workspace lokal lalu push ke GitHub menggunakan token yang " +
+        "tersimpan di server ini (token TIDAK PERNAH dikirim lewat chat/context Claude). " +
+        "HANYA panggil ini SETELAH user secara eksplisit menyetujui perubahan pada giliran " +
+        "percakapan ini (lihat git_status/git_diff dulu). Jangan pernah set confirmed=true tanpa " +
+        "persetujuan eksplisit dari user.",
       inputSchema: {
         type: "object",
         properties: {
           owner: { type: "string" },
           repo: { type: "string" },
           branch: { type: "string" },
-          files: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                path: { type: "string" },
-                content: { type: "string" },
-                delete: { type: "boolean" },
-              },
-              required: ["path"],
-            },
-          },
-          commitMessage: { type: "string" },
-        },
-        required: ["owner", "repo", "files", "commitMessage"],
-      },
-    },
-    {
-      name: "github_push_confirmed",
-      description:
-        "Push satu atau banyak file ke GitHub dalam SATU commit via Git Data API (tanpa git clone lokal). " +
-        "HANYA panggil tool ini SETELAH user secara eksplisit menyetujui hasil dari github_preview_push " +
-        "pada giliran percakapan ini. Jangan pernah set confirmed=true tanpa persetujuan eksplisit dari user.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          branch: { type: "string" },
-          files: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                path: { type: "string" },
-                content: { type: "string" },
-                delete: { type: "boolean" },
-              },
-              required: ["path"],
-            },
-          },
           commitMessage: { type: "string" },
           confirmed: { type: "boolean" },
-          createBranchIfMissing: { type: "boolean" },
         },
-        required: ["owner", "repo", "files", "commitMessage", "confirmed"],
+        required: ["owner", "repo", "commitMessage", "confirmed"],
       },
+    },
+    {
+      name: "git_discard_workspace",
+      description:
+        "Hapus workspace lokal untuk owner/repo (mis. kalau ingin clone ulang dari awal karena " +
+        "konflik atau state rusak). Ini TIDAK mempengaruhi apa pun di GitHub, hanya folder lokal.",
+      inputSchema: {
+        type: "object",
+        properties: { owner: { type: "string" }, repo: { type: "string" } },
+        required: ["owner", "repo"],
+      },
+    },
+    {
+      name: "github_whoami",
+      description: "Cek token GitHub yang terpasang valid atau tidak, dan tampilkan username.",
+      inputSchema: { type: "object", properties: {} },
     },
   ],
 }));
@@ -179,109 +154,120 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
-      case "github_whoami": {
-        const pusher = getPusher();
-        const info = await pusher.whoAmI();
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Terhubung sebagai: ${info.login}\nScope token: ${
-                info.scopes.join(", ") || "(tidak ada / token classic tanpa scope terbaca)"
-              }`,
-            },
-          ],
-        };
-      }
-
-      case "github_repo_exists": {
-        const { owner, repo } = RepoRefSchema.parse(args);
-        const pusher = getPusher();
-        const exists = await pusher.repoExists(owner, repo);
-        return {
-          content: [{ type: "text", text: exists ? "Repo ditemukan." : "Repo tidak ditemukan." }],
-        };
-      }
-
-      case "github_create_repo": {
-        const input = CreateRepoSchema.parse(args);
-        const pusher = getPusher();
-        const repo = await pusher.createRepo(input.name, {
-          private: input.private,
-          description: input.description,
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Repo dibuat: ${repo.full_name}\nURL: ${repo.html_url}\nDefault branch: ${repo.default_branch}`,
-            },
-          ],
-        };
-      }
-
-      case "github_read_file": {
-        const input = ReadFileSchema.parse(args);
-        const pusher = getPusher();
-        const content = await pusher.getFileContent(input.owner, input.repo, input.path, input.ref);
-        return {
-          content: [
-            {
-              type: "text",
-              text: content === null ? "File tidak ditemukan di repo." : content,
-            },
-          ],
-        };
-      }
-
-      case "github_preview_push": {
-        const input = PreparePushSchema.parse(args);
-        const lines = input.files.map((f) =>
-          f.delete ? `  - HAPUS: ${f.path}` : `  - TULIS: ${f.path} (${(f.content ?? "").length} karakter)`
-        );
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `Preview push ke ${input.owner}/${input.repo} (branch: ${input.branch}):\n` +
-                `Pesan commit: "${input.commitMessage}"\n` +
-                `Perubahan (${input.files.length} file):\n${lines.join("\n")}\n\n` +
-                `Ini BARU PREVIEW, belum ada perubahan di GitHub. Tampilkan ringkasan ini ke user dan ` +
-                `minta persetujuan eksplisit sebelum memanggil github_push_confirmed.`,
-            },
-          ],
-        };
-      }
-
-      case "github_push_confirmed": {
-        const input = ConfirmPushSchema.parse(args);
-        const pusher = getPusher();
-        const files: PushFile[] = input.files.map((f) => ({
-          path: f.path,
-          content: f.content ?? "",
-          delete: f.delete,
-        }));
-        const result = await pusher.pushFiles({
+      case "git_sync_workspace": {
+        const input = RepoRefSchema.parse(args);
+        const { token, host } = getToken();
+        const dir = await ensureWorkspace({
           owner: input.owner,
           repo: input.repo,
           branch: input.branch,
-          files,
-          commitMessage: input.commitMessage,
-          createBranchIfMissing: input.createBranchIfMissing,
+          token,
+          host,
         });
+        const status = await getStatus(dir);
         return {
           content: [
             {
               type: "text",
               text:
-                `Push berhasil.\n` +
-                `Commit: ${result.commitSha}\n` +
-                `URL: ${result.commitUrl}\n` +
-                `Branch: ${result.branch}\n` +
-                `File berubah: ${result.filesChanged}`,
+                `Workspace siap di: ${dir}\n` +
+                `Branch: ${status.branch}\n` +
+                `Ahead ${status.ahead} / Behind ${status.behind} dari origin.`,
             },
           ],
+        };
+      }
+
+      case "git_apply_patch": {
+        const input = ApplyPatchSchema.parse(args);
+        const dir = workspacePathFor(input.owner, input.repo);
+        await applyPatch(dir, input.patch);
+        const status = await getStatus(dir);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Patch diterapkan ke workspace lokal.\n` +
+                `File berubah (${status.changedFiles.length}):\n` +
+                status.changedFiles.map((f) => `  ${f.status} ${f.path}`).join("\n") +
+                `\n\nBelum di-commit / belum di-push. Tinjau dengan git_diff atau git_status, ` +
+                `lalu minta persetujuan user sebelum memanggil git_push.`,
+            },
+          ],
+        };
+      }
+
+      case "git_status": {
+        const input = RepoRefSchema.parse(args);
+        const dir = workspacePathFor(input.owner, input.repo);
+        const status = await getStatus(dir);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                status.changedFiles.length === 0
+                  ? "Tidak ada perubahan yang belum di-commit."
+                  : `File berubah (${status.changedFiles.length}):\n` +
+                    status.changedFiles.map((f) => `  ${f.status} ${f.path}`).join("\n"),
+            },
+          ],
+        };
+      }
+
+      case "git_diff": {
+        const input = RepoRefSchema.parse(args);
+        const dir = workspacePathFor(input.owner, input.repo);
+        const diff = await getDiff(dir);
+        return {
+          content: [{ type: "text", text: diff || "(tidak ada perubahan)" }],
+        };
+      }
+
+      case "git_push": {
+        const input = PushSchema.parse(args);
+        const dir = workspacePathFor(input.owner, input.repo);
+        const { token } = getToken();
+
+        const preStatus = await getStatus(dir);
+        if (preStatus.changedFiles.length === 0) {
+          return {
+            content: [{ type: "text", text: "Tidak ada perubahan untuk di-commit/push." }],
+          };
+        }
+
+        await commitAll(dir, input.commitMessage);
+        await push({ dir, branch: input.branch, token, createRemoteBranch: true });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Push berhasil ke ${input.owner}/${input.repo} (branch: ${input.branch}).\n` +
+                `Pesan commit: "${input.commitMessage}"\n` +
+                `File yang di-push: ${preStatus.changedFiles.length}`,
+            },
+          ],
+        };
+      }
+
+      case "git_discard_workspace": {
+        const input = RepoRefSchema.parse(args);
+        removeWorkspace(input.owner, input.repo);
+        return {
+          content: [{ type: "text", text: `Workspace lokal untuk ${input.owner}/${input.repo} dihapus.` }],
+        };
+      }
+
+      case "github_whoami": {
+        const { token, host } = getToken();
+        const { GitHubPusher } = await import("./github.js");
+        const pusher = new GitHubPusher(token, host);
+        const info = await pusher.whoAmI();
+        return {
+          content: [{ type: "text", text: `Terhubung sebagai: ${info.login}` }],
         };
       }
 
