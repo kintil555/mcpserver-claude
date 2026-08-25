@@ -30,3 +30,47 @@ jobs:
 
       - name: Sanity check CLI entry
         run: node bin/cli.js --help || node bin/cli.js
+
+  auto-release:
+    name: Auto tag & release
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Baca versi dari package.json
+        id: pkg
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cek apakah tag sudah ada
+        id: check_tag
+        run: |
+          if git rev-parse "${{ steps.pkg.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Buat tag & GitHub Release otomatis
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.pkg.outputs.tag }}
+          name: ${{ steps.pkg.outputs.tag }}
+          generate_release_notes: true
+          make_latest: "true"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip (versi belum berubah)
+        if: steps.check_tag.outputs.exists == 'true'
+        run: echo "Versi ${{ steps.pkg.outputs.tag }} sudah punya release, tidak ada yang baru dirilis."
