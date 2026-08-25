@@ -299,12 +299,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function main() {
+export async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch((err) => {
-  console.error("Fatal error menjalankan MCP server:", err);
-  process.exit(1);
-});
+// Hanya auto-start saat dijalankan sebagai command "start" dari cli.js
+// (yang meng-import file ini secara statis). Guard ini mencegah import
+// biasa (mis. tooling/tsc) ikut men-trigger koneksi stdio.
+if (process.argv[2] === "start") {
+  main().catch((err) => {
+    console.error("Fatal error menjalankan MCP server:", err);
+    process.exit(1);
+  });
+}

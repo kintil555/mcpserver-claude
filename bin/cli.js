@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const distDir = join(__dirname, "..", "dist");
+import { saveConfig, getConfigPath, configExists, loadConfig, deleteConfigToken } from "../dist/config.js";
+import { GitHubPusher } from "../dist/github.js";
+// server.js self-guards on process.argv[2] === "start" (see src/server.ts),
+// so importing it statically here is safe for all other commands.
+import "../dist/server.js";
 
 const command = process.argv[2];
 
@@ -38,9 +38,6 @@ async function promptHidden(question) {
 }
 
 async function runSetup() {
-  const { saveConfig, getConfigPath } = await import(join(distDir, "config.js"));
-  const { GitHubPusher } = await import(join(distDir, "github.js"));
-
   console.log("=== Setup mcp-github-push ===\n");
   console.log("Buat Personal Access Token (PAT) di:");
   console.log("  https://github.com/settings/tokens?type=beta");
@@ -91,9 +88,6 @@ async function runSetup() {
 }
 
 async function runStatus() {
-  const { configExists, getConfigPath, loadConfig } = await import(join(distDir, "config.js"));
-  const { GitHubPusher } = await import(join(distDir, "github.js"));
-
   if (!configExists()) {
     console.log("Belum ada config. Jalankan: npx @kintil555/mcp-github-push setup");
     return;
@@ -114,12 +108,7 @@ async function runStatus() {
   }
 }
 
-async function runStart() {
-  await import(join(distDir, "server.js"));
-}
-
 async function runLogout() {
-  const { deleteConfigToken, getConfigPath, configExists } = await import(join(distDir, "config.js"));
   if (!configExists()) {
     console.log("Tidak ada token tersimpan.");
     return;
@@ -153,7 +142,8 @@ switch (command) {
     await runLogout();
     break;
   case "start":
-    await runStart();
+    // server.js sudah auto-start via guard di dalamnya (argv[2] === "start")
+    // begitu di-import di atas.
     break;
   default:
     printHelp();
