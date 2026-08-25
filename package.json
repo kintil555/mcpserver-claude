@@ -1,6 +1,6 @@
 {
   "name": "@kintil555/mcp-github-push",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "MCP server ringan untuk push project ke GitHub langsung via REST API (tanpa git clone lokal) — dilengkapi CLI setup token dan konfirmasi sebelum push.",
   "type": "module",
   "license": "MIT",
