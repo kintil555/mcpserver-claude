@@ -1,7 +1,7 @@
 {
   "name": "@kintil555/mcp-github-push",
   "version": "1.0.4",
-  "description": "MCP server ringan untuk push project ke GitHub langsung via REST API (tanpa git clone lokal) — dilengkapi CLI setup token dan konfirmasi sebelum push.",
+  "description": "MCP server ringan untuk push project ke GitHub langsung via REST API (tanpa git clone lokal) \u2014 dilengkapi CLI setup token dan konfirmasi sebelum push.",
   "type": "module",
   "license": "MIT",
   "author": "kintil555",
@@ -22,7 +22,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "start": "node dist/server.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "package": "npm run build && pkg . --out-path pkg-dist"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -34,6 +35,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@yao-pkg/pkg": "^6.22.0",
     "typescript": "^5.7.2"
   },
   "keywords": [
@@ -44,5 +46,16 @@
     "git",
     "push",
     "cli"
-  ]
+  ],
+  "pkg": {
+    "assets": [
+      "dist/**/*.js"
+    ],
+    "targets": [
+      "node18-linux-x64",
+      "node18-win-x64",
+      "node18-macos-x64"
+    ],
+    "outputPath": "pkg-dist"
+  }
 }

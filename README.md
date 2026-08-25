@@ -13,7 +13,39 @@ Berbentuk **CLI terminal** — install lewat npm, setup token sekali, lalu dafta
 
 ## Instalasi
 
-Butuh Node.js 18+.
+### Opsi A — Tanpa Node.js (executable siap pakai)
+
+Tidak perlu install Node.js sama sekali. Download binary sesuai OS kamu dari [halaman Releases](https://github.com/kintil555/mcpserver-claude/releases/latest):
+
+- Windows: `mcp-github-push-win-x64.exe`
+- Linux: `mcp-github-push-linux-x64`
+- macOS: `mcp-github-push-macos-x64`
+
+Jalankan dari terminal:
+
+```bash
+# Windows (PowerShell/CMD)
+mcp-github-push-win-x64.exe setup
+
+# Linux/macOS
+chmod +x mcp-github-push-linux-x64
+./mcp-github-push-linux-x64 setup
+```
+
+Lalu daftarkan **path lengkap ke file exe** di config MCP client:
+
+```json
+{
+  "mcpServers": {
+    "github-push": {
+      "command": "C:\\path\\ke\\mcp-github-push-win-x64.exe",
+      "args": ["start"]
+    }
+  }
+}
+```
+
+### Opsi B — Lewat npm (butuh Node.js 18+)
 
 ```bash
 npx @kintil555/mcp-github-push setup

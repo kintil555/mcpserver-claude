@@ -125,3 +125,57 @@ jobs:
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+    outputs:
+      tag: ${{ steps.pkg.outputs.tag }}
+
+  build-exe:
+    name: Build standalone .exe (${{ matrix.os_label }})
+    needs: auto-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: node18-win-x64
+            os_label: windows
+            asset_name: mcp-github-push-win-x64.exe
+          - target: node18-linux-x64
+            os_label: linux
+            asset_name: mcp-github-push-linux-x64
+          - target: node18-macos-x64
+            os_label: macos
+            asset_name: mcp-github-push-macos-x64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.auto-release.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Package standalone binary
+        run: npx @yao-pkg/pkg . --targets ${{ matrix.target }} --output dist-exe/${{ matrix.asset_name }}
+
+      - name: Sanity check (linux only, runs on this runner)
+        if: matrix.os_label == 'linux'
+        run: |
+          chmod +x dist-exe/${{ matrix.asset_name }}
+          ./dist-exe/${{ matrix.asset_name }} --help
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.auto-release.outputs.tag }}
+          files: dist-exe/${{ matrix.asset_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
