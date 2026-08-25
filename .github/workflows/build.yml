@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Kunci semua run push ke main dalam 1 antrian — mencegah 2 run publish
+# berjalan bersamaan (race condition) yang menyebabkan 403 "cannot publish
+# over previously published version".
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
