@@ -32,17 +32,25 @@ jobs:
         run: node bin/cli.js --help || node bin/cli.js
 
   auto-release:
-    name: Auto tag & release
+    name: Auto tag, release & publish npm
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
 
       - name: Baca versi dari package.json
         id: pkg
@@ -60,6 +68,10 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Catatan: tag/release yang dibuat lewat GITHUB_TOKEN bawaan TIDAK memicu
+      # workflow lain (anti-loop by design dari GitHub). Karena itu publish npm
+      # dilakukan langsung di job ini, bukan lewat workflow terpisah yang
+      # menunggu event release/tag.
       - name: Buat tag & GitHub Release otomatis
         if: steps.check_tag.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
@@ -71,6 +83,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install dependencies
+        if: steps.check_tag.outputs.exists == 'false'
+        run: npm ci
+
+      - name: Build
+        if: steps.check_tag.outputs.exists == 'false'
+        run: npm run build
+
+      - name: Publish ke npm
+        if: steps.check_tag.outputs.exists == 'false'
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Skip (versi belum berubah)
         if: steps.check_tag.outputs.exists == 'true'
-        run: echo "Versi ${{ steps.pkg.outputs.tag }} sudah punya release, tidak ada yang baru dirilis."
+        run: echo "Versi ${{ steps.pkg.outputs.tag }} sudah punya release & sudah pernah dipublish, tidak ada yang baru dirilis."
