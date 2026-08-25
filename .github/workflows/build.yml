@@ -32,7 +32,7 @@ jobs:
         run: node bin/cli.js --help || node bin/cli.js
 
   auto-release:
-    name: Auto tag, release & publish npm
+    name: Auto bump, tag, release & publish npm
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -44,6 +44,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -52,28 +53,55 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
 
-      - name: Baca versi dari package.json
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cek apakah versi package.json sudah pernah dipublish ke npm
+        id: check_npm
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED_VERSION=$(npm view "$NAME" version 2>/dev/null || echo "none")
+          echo "local=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "published=$PUBLISHED_VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL_VERSION" = "$PUBLISHED_VERSION" ]; then
+            echo "needs_bump=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_bump=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Kalau versi di package.json belum diubah manual (sama dengan versi
+      # yang sudah live di npm), bump patch otomatis supaya publish tidak
+      # pernah 403. Kalau developer sudah bump manual, pakai versi itu apa
+      # adanya (memungkinkan minor/major bump manual).
+      - name: Auto-bump patch version bila perlu
+        id: bump
+        if: steps.check_npm.outputs.needs_bump == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version patch -m "chore: auto bump version to %s [skip ci]"
+          git push origin HEAD:main
+          git push origin --tags
+
+      - name: Set versi final
         id: pkg
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Cek apakah tag sudah ada
-        id: check_tag
+      - name: Buat tag (jika tidak lewat npm version) & GitHub Release
+        if: steps.check_npm.outputs.needs_bump == 'false'
         run: |
-          if git rev-parse "${{ steps.pkg.outputs.tag }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git rev-parse "${{ steps.pkg.outputs.tag }}" >/dev/null 2>&1; then
+            git tag "${{ steps.pkg.outputs.tag }}"
+            git push origin "${{ steps.pkg.outputs.tag }}"
           fi
 
-      # Catatan: tag/release yang dibuat lewat GITHUB_TOKEN bawaan TIDAK memicu
-      # workflow lain (anti-loop by design dari GitHub). Karena itu publish npm
-      # dilakukan langsung di job ini, bukan lewat workflow terpisah yang
-      # menunggu event release/tag.
-      - name: Buat tag & GitHub Release otomatis
-        if: steps.check_tag.outputs.exists == 'false'
+      - name: Buat GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.pkg.outputs.tag }}
@@ -83,20 +111,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install dependencies
-        if: steps.check_tag.outputs.exists == 'false'
-        run: npm ci
-
       - name: Build
-        if: steps.check_tag.outputs.exists == 'false'
         run: npm run build
 
       - name: Publish ke npm
-        if: steps.check_tag.outputs.exists == 'false'
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Skip (versi belum berubah)
-        if: steps.check_tag.outputs.exists == 'true'
-        run: echo "Versi ${{ steps.pkg.outputs.tag }} sudah punya release & sudah pernah dipublish, tidak ada yang baru dirilis."
