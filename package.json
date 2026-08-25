@@ -1,16 +1,16 @@
 {
   "name": "@kintil555/mcp-github-push",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server ringan untuk push project ke GitHub langsung via REST API (tanpa git clone lokal) — dilengkapi CLI setup token dan konfirmasi sebelum push.",
   "type": "module",
   "license": "MIT",
   "author": "kintil555",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kintil555/mcp-github-push.git"
+    "url": "git+https://github.com/kintil555/mcpserver-claude.git"
   },
   "bin": {
-    "mcp-github-push": "./bin/cli.js"
+    "mcp-github-push": "bin/cli.js"
   },
   "files": [
     "bin",
