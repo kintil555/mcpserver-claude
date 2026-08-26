@@ -2,6 +2,9 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { join } from "node:path";
 import { saveConfig, getConfigPath, configExists, loadConfig, deleteConfigToken } from "../dist/config.js";
 import { GitHubPusher } from "../dist/github.js";
 // server.js self-guards on process.argv[2] === "start" (see src/server.ts),
@@ -48,6 +51,85 @@ async function questionHidden(rl, question) {
       delete rl._writeToOutput;
     }
   }
+}
+
+/**
+ * Path config Claude Desktop per-OS. Dipakai untuk auto-registrasi MCP server
+ * ini setelah setup selesai, supaya tidak ada langkah copy-paste JSON manual
+ * yang gampang salah/hilang (root cause paling umum dari "MCP Error saat
+ * launching": path/command di config ini nunjuk ke file yang sudah
+ * pindah/hilang).
+ *
+ * Beberapa instalasi (build custom/modded, mis. folder "Claude-modified")
+ * memakai nama folder berbeda dari default "Claude". Kita cek semua kandidat
+ * yang punya claude_desktop_config.json dan pakai yang pertama ketemu; kalau
+ * tidak ada satu pun yang ada, fallback ke path default "Claude" (dibuat baru).
+ */
+function getClaudeDesktopConfigPath() {
+  const os = platform();
+  let baseDir;
+  if (os === "win32") {
+    baseDir = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+  } else if (os === "darwin") {
+    baseDir = join(homedir(), "Library", "Application Support");
+  } else {
+    baseDir = join(homedir(), ".config");
+  }
+
+  const candidateFolders = ["Claude", "Claude-modified"];
+  for (const folder of candidateFolders) {
+    const candidate = join(baseDir, folder, "claude_desktop_config.json");
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  // Tidak ada satu pun ditemukan -- default ke "Claude" (akan dibuat baru).
+  return join(baseDir, "Claude", "claude_desktop_config.json");
+}
+
+/**
+ * Deteksi apakah proses ini berjalan sebagai .exe standalone (pkg) atau
+ * lewat `node bin/cli.js`. pkg menyuntikkan process.pkg saat runtime.
+ */
+function isStandaloneExe() {
+  return Boolean(process.pkg);
+}
+
+/**
+ * Tulis/merge entry MCP server ini ke claude_desktop_config.json, memakai
+ * command yang BENAR-BENAR jalan di komputer ini saat ini -- bukan yang
+ * diketik manual oleh user. Ini yang mencegah kasus seperti di log: exe
+ * dipindah ke Downloads lalu di-rename/dihapus, config lama tetap menunjuk
+ * path mati, dan client melempar ENOENT setiap start.
+ */
+async function writeClaudeDesktopConfig() {
+  const configPath = getClaudeDesktopConfigPath();
+  let entry;
+  if (isStandaloneExe()) {
+    // process.execPath == path exe standalone ini sendiri saat ini berjalan.
+    entry = { command: process.execPath, args: ["start"] };
+  } else {
+    entry = { command: "npx", args: ["-y", "@kintil555/mcp-github-push", "start"] };
+  }
+
+  let existing = {};
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, "utf-8"));
+    } catch {
+      console.warn(`\nPeringatan: ${configPath} ada tapi bukan JSON valid -- dilewati, tidak ditimpa.`);
+      return null;
+    }
+  }
+  existing.mcpServers = existing.mcpServers || {};
+  existing.mcpServers["github-push"] = entry;
+
+  const dir = join(configPath, "..");
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(configPath, JSON.stringify(existing, null, 2), "utf-8");
+  return { configPath, entry };
 }
 
 async function checkGitInstalled() {
@@ -132,17 +214,54 @@ async function runSetup() {
     }
 
     console.log(`\nToken tersimpan & terverifikasi di: ${getConfigPath()}`);
-    console.log("\nSetup selesai. Sekarang tambahkan MCP server ini ke config client kamu, contoh:");
-    console.log(`
+
+    const claudeConfigPath = getClaudeDesktopConfigPath();
+    const rl2 = createInterface({ input: stdin, output: stdout });
+    let doWrite;
+    try {
+      const ans = await rl2.question(
+        `\nDaftarkan otomatis ke Claude Desktop (${claudeConfigPath})? [Y/n] `
+      );
+      doWrite = ans.trim().toLowerCase() !== "n";
+    } finally {
+      rl2.close();
+    }
+
+    if (doWrite) {
+      try {
+        const result = await writeClaudeDesktopConfig();
+        if (result) {
+          console.log(`\nTerdaftar di ${result.configPath}:`);
+          console.log(JSON.stringify({ "github-push": result.entry }, null, 2));
+          console.log("\nRestart Claude Desktop supaya perubahan kebaca.");
+        }
+      } catch (writeErr) {
+        console.error(`\nGagal menulis config otomatis: ${writeErr.message}`);
+        console.log("Tambahkan manual, contoh:");
+        console.log(`
 {
   "mcpServers": {
     "github-push": {
-      "command": "npx",
-      "args": ["-y", "@kintil555/mcp-github-push", "start"]
+      "command": "${isStandaloneExe() ? process.execPath.replace(/\\/g, "\\\\") : "npx"}",
+      "args": ${isStandaloneExe() ? '["start"]' : '["-y", "@kintil555/mcp-github-push", "start"]'}
     }
   }
 }
 `);
+      }
+    } else {
+      console.log("\nLewati. Tambahkan manual ke config client kamu, contoh:");
+      console.log(`
+{
+  "mcpServers": {
+    "github-push": {
+      "command": "${isStandaloneExe() ? process.execPath.replace(/\\/g, "\\\\") : "npx"}",
+      "args": ${isStandaloneExe() ? '["start"]' : '["-y", "@kintil555/mcp-github-push", "start"]'}
+    }
+  }
+}
+`);
+    }
   } catch (err) {
     console.error(`\nGagal verifikasi token: ${err.message}`);
     console.error("Pastikan token valid dan punya akses ke repo yang dituju.");
@@ -168,6 +287,26 @@ async function runStatus() {
     console.log(`Status: OK — login sebagai ${info.login}`);
   } catch (err) {
     console.log(`Status: token tidak valid (${err.message})`);
+  }
+
+  const claudeConfigPath = getClaudeDesktopConfigPath();
+  if (existsSync(claudeConfigPath)) {
+    try {
+      const parsed = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
+      const entry = parsed.mcpServers?.["github-push"];
+      if (!entry) {
+        console.log(`\nBelum terdaftar di ${claudeConfigPath}. Jalankan "setup" untuk mendaftarkan.`);
+        return;
+      }
+      if (entry.command !== "npx" && !existsSync(entry.command)) {
+        console.log(`\nPeringatan: command terdaftar (${entry.command}) TIDAK ditemukan di disk.`);
+        console.log('Ini penyebab paling umum "MCP Error saat launching". Jalankan "setup" lagi untuk memperbaiki.');
+      } else {
+        console.log(`\nRegistrasi Claude Desktop OK: ${entry.command} ${entry.args?.join(" ") ?? ""}`);
+      }
+    } catch {
+      console.log(`\nPeringatan: ${claudeConfigPath} bukan JSON valid.`);
+    }
   }
 }
 
