@@ -86,17 +86,37 @@ jobs:
 
       # Kalau versi di package.json belum lebih tinggi dari versi yang sudah
       # live di npm, bump patch otomatis supaya publish tidak pernah 403.
-      # Kalau developer sudah bump manual ke versi yang lebih tinggi, pakai
-      # versi itu apa adanya (memungkinkan minor/major bump manual).
+      # Loop (bukan bump sekali) karena histori repo ini sempat punya tag git
+      # yang sudah dibuat duluan tapi publish npm-nya gagal di percobaan
+      # sebelumnya -- jadi tag & versi npm live bisa tidak sinkron. Terus
+      # bump sampai ketemu versi yang TIDAK punya tag git maupun belum live di
+      # npm, supaya tidak berhenti di 'tag already exists' seperti sebelumnya.
       - name: Auto-bump patch version bila perlu
         id: bump
         if: steps.check_npm.outputs.needs_bump == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch -m "chore: auto bump version to %s [skip ci]"
-          git push origin HEAD:main
-          git push origin --tags
+          git fetch --tags origin
+
+          for i in 1 2 3 4 5; do
+            npm version patch --no-git-tag-version -m "chore: auto bump version to %s [skip ci]"
+            NEW_VERSION=$(node -p "require('./package.json').version")
+            TAG="v$NEW_VERSION"
+
+            if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+              echo "Tag $TAG sudah ada (dari percobaan sebelumnya), coba versi berikutnya..."
+              continue
+            fi
+
+            git add package.json package-lock.json
+            git commit -m "chore: auto bump version to $NEW_VERSION [skip ci]"
+            git tag "$TAG"
+            git push origin HEAD:main
+            git push origin "$TAG"
+            echo "Berhasil bump ke $NEW_VERSION"
+            break
+          done
 
       - name: Set versi final
         id: pkg
