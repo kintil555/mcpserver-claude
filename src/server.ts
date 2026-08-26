@@ -12,6 +12,8 @@ import {
   getStatus,
   getDiff,
   applyPatch,
+  writeFile,
+  deleteFile,
   commitAll,
   push,
   workspacePathFor,
@@ -33,6 +35,15 @@ const ApplyPatchSchema = RepoRefSchema.extend({
     .describe(
       "Isi unified diff (hasil `git diff` dari sandbox Claude). Bisa mencakup banyak file sekaligus."
     ),
+});
+
+const WriteFileSchema = RepoRefSchema.extend({
+  path: z.string().describe("Path relatif file di repo, mis. src/index.ts"),
+  content: z.string().describe("Isi lengkap file (menimpa seluruh isi lama)."),
+});
+
+const DeleteFileSchema = RepoRefSchema.extend({
+  path: z.string().describe("Path relatif file yang akan dihapus."),
 });
 
 const PushSchema = RepoRefSchema.extend({
@@ -87,6 +98,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           patch: { type: "string" },
         },
         required: ["owner", "repo", "patch"],
+      },
+    },
+    {
+      name: "git_write_file",
+      description:
+        "Tulis/timpa satu file di workspace lokal dengan isi lengkap yang diberikan. Gunakan ini " +
+        "sebagai cara UTAMA untuk membuat/mengedit file — jauh lebih andal daripada git_apply_patch " +
+        "karena tidak melibatkan parsing diff/whitespace yang gampang korup. Panggil git_sync_workspace " +
+        "dulu sebelum ini. Untuk banyak file, panggil tool ini berulang kali (satu per file).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          branch: { type: "string" },
+          path: { type: "string" },
+          content: { type: "string" },
+        },
+        required: ["owner", "repo", "path", "content"],
+      },
+    },
+    {
+      name: "git_delete_file",
+      description: "Hapus satu file dari workspace lokal.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          branch: { type: "string" },
+          path: { type: "string" },
+        },
+        required: ["owner", "repo", "path"],
       },
     },
     {
@@ -196,6 +240,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 `lalu minta persetujuan user sebelum memanggil git_push.`,
             },
           ],
+        };
+      }
+
+      case "git_write_file": {
+        const input = WriteFileSchema.parse(args);
+        const dir = workspacePathFor(input.owner, input.repo);
+        await writeFile(dir, input.path, input.content);
+        return {
+          content: [{ type: "text", text: `File ditulis: ${input.path}` }],
+        };
+      }
+
+      case "git_delete_file": {
+        const input = DeleteFileSchema.parse(args);
+        const dir = workspacePathFor(input.owner, input.repo);
+        await deleteFile(dir, input.path);
+        return {
+          content: [{ type: "text", text: `File dihapus: ${input.path}` }],
         };
       }
 

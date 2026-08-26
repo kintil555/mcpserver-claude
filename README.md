@@ -85,7 +85,9 @@ Restart client-nya. Tools yang tersedia untuk Claude:
 |---|---|
 | `github_whoami` | Cek token valid & lihat username |
 | `git_sync_workspace` | Clone (kalau belum ada) atau fetch+checkout branch terbaru ke workspace lokal |
-| `git_apply_patch` | Terapkan unified diff (dari `git diff` di sandbox Claude) ke workspace lokal |
+| `git_write_file` | Tulis/timpa satu file dengan isi lengkap — cara utama edit file, tidak butuh diff |
+| `git_delete_file` | Hapus satu file dari workspace lokal |
+| `git_apply_patch` | (Fallback) Terapkan unified diff mentah — rawan gagal kalau diketik ulang manual |
 | `git_status` | Lihat ringkasan file yang berubah, belum di-commit |
 | `git_diff` | Lihat detail diff lengkap di workspace lokal |
 | `git_push` | Commit + push sungguhan — hanya jalan setelah user setuju (`confirmed: true`) |

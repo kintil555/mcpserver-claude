@@ -198,6 +198,21 @@ export async function applyPatch(dir: string, patchText: string): Promise<GitRes
   }
 }
 
+/** Tulis konten file secara langsung (create/overwrite) — tidak lewat diff parser. */
+export async function writeFile(dir: string, relPath: string, content: string): Promise<void> {
+  const full = join(dir, relPath);
+  if (!full.startsWith(dir)) throw new Error("Path di luar workspace ditolak.");
+  mkdirSync(join(full, ".."), { recursive: true });
+  writeFileSync(full, content, "utf-8");
+}
+
+/** Hapus file di workspace secara langsung. */
+export async function deleteFile(dir: string, relPath: string): Promise<void> {
+  const full = join(dir, relPath);
+  if (!full.startsWith(dir)) throw new Error("Path di luar workspace ditolak.");
+  if (existsSync(full)) unlinkSync(full);
+}
+
 export async function commitAll(
   dir: string,
   message: string,
