@@ -1,35 +1,35 @@
 # mcp-github-push
 
-MCP server yang berjalan **di komputer kamu sendiri**, menyimpan GitHub PAT secara lokal, dan melakukan **`git clone`/`commit`/`push` sungguhan** lewat `git` CLI asli — bukan lewat REST API yang mengharuskan isi setiap file diketik ulang dalam parameter tool call.
+An MCP server that runs **on your own computer**, stores your GitHub PAT locally, and performs **real `git clone`/`commit`/`push`** through the actual `git` CLI — not a REST API that forces every file's full content to be retyped into tool call parameters.
 
-Berbentuk **CLI terminal** — install lewat npm, setup token sekali, lalu daftarkan ke MCP client kamu.
+Ships as a **terminal CLI** — install via npm, set up your token once, then register it with your MCP client.
 
-## Cara kerja
+## How it works
 
-1. Claude bekerja di sandboxnya sendiri (clone, edit file, dsb).
-2. Setelah selesai, Claude menghasilkan **`git diff`** dari perubahannya — teks ringkas, bukan isi file utuh.
-3. Diff itu dikirim lewat tool call `git_apply_patch` ke MCP server ini, yang menerapkannya ke **workspace lokalnya sendiri** (clone terpisah, tersimpan di `~/.config/mcp-github-push/workspaces/`).
-4. Setelah user meninjau (`git_status` / `git_diff`) dan menyetujui, Claude memanggil `git_push` — server ini yang menjalankan `git commit` + `git push` sungguhan pakai token yang tersimpan di server.
+1. Claude works in its own sandbox (clone, edit files, etc.).
+2. When done, Claude produces a **`git diff`** of its changes — compact text, not full file contents.
+3. That diff is sent via a `git_apply_patch` tool call to this MCP server, which applies it to **its own local workspace** (a separate clone stored under `~/.config/mcp-github-push/workspaces/`).
+4. After the user reviews (`git_status` / `git_diff`) and approves, Claude calls `git_push` — this server runs the actual `git commit` + `git push` using the token stored locally.
 
-**Token GitHub kamu tidak pernah lewat chat/context Claude** — token hanya ada di file config lokal dan disuntikkan langsung ke proses `git` saat fetch/push.
+**Your GitHub token never passes through Claude's chat/context** — it only lives in a local config file and is injected directly into the `git` process during fetch/push.
 
-## Kenapa ini beda dari connector GitHub bawaan?
+## Why is this different from the built-in GitHub connector?
 
-- **Bukan REST API per file.** Push memakai `git` CLI asli di atas clone lokal, jadi mendukung ratusan file sekaligus lewat satu diff — bukan mengetik ulang isi tiap file dalam parameter JSON.
-- **Wajib konfirmasi sebelum push.** `git_push` mensyaratkan parameter `confirmed: true`, yang hanya boleh diisi Claude setelah user menyetujui secara eksplisit di percakapan.
-- **Token disimpan lokal, tidak pernah ke chat.** File config permission `600` di POSIX (Linux/macOS); di Windows mengikuti ACL folder user biasa.
+- **Not per-file REST calls.** Pushes use the real `git` CLI on top of a local clone, so hundreds of files are supported in one diff — not retyped one-by-one as JSON parameters.
+- **Push requires confirmation.** `git_push` requires a `confirmed: true` parameter, which Claude may only set after the user has explicitly approved in conversation.
+- **Token stored locally, never sent to chat.** Config file permissions are `600` on POSIX (Linux/macOS); on Windows it relies on standard user-folder ACLs.
 
-## Instalasi
+## Installation
 
-### Opsi A — Tanpa Node.js (executable siap pakai)
+### Option A — No Node.js required (standalone executable)
 
-Tidak perlu install Node.js sama sekali. Download binary sesuai OS kamu dari [halaman Releases](https://github.com/kintil555/mcpserver-claude/releases/latest):
+No need to install Node.js at all. Download the binary for your OS from the [Releases page](https://github.com/kintil555/mcpserver-claude/releases/latest):
 
 - Windows: `mcp-github-push-win-x64.exe`
 - Linux: `mcp-github-push-linux-x64`
 - macOS: `mcp-github-push-macos-x64`
 
-Jalankan dari terminal:
+Run from a terminal:
 
 ```bash
 # Windows (PowerShell/CMD)
@@ -40,33 +40,33 @@ chmod +x mcp-github-push-linux-x64
 ./mcp-github-push-linux-x64 setup
 ```
 
-Lalu daftarkan **path lengkap ke file exe** di config MCP client:
+Then register the **full path to the exe** in your MCP client config:
 
 ```json
 {
   "mcpServers": {
     "github-push": {
-      "command": "C:\\path\\ke\\mcp-github-push-win-x64.exe",
+      "command": "C:\\path\\to\\mcp-github-push-win-x64.exe",
       "args": ["start"]
     }
   }
 }
 ```
 
-### Opsi B — Lewat npm (butuh Node.js 18+)
+### Option B — Via npm (requires Node.js 18+)
 
 ```bash
 npx @kintil555/mcp-github-push setup
 ```
 
-Ikuti instruksi:
-1. Buat [Personal Access Token](https://github.com/settings/tokens?type=beta) (fine-grained direkomendasikan) dengan scope **Contents: Read and write** untuk repo yang ingin dipakai.
-2. Tempel token saat diminta (input disamarkan di terminal).
-3. Token diverifikasi otomatis dan disimpan di `~/.config/mcp-github-push/config.json`.
+Follow the prompts:
+1. Create a [Personal Access Token](https://github.com/settings/tokens?type=beta) (fine-grained recommended) with **Contents: Read and write** scope for the repos you want to use.
+2. Paste the token when prompted (input is masked in the terminal).
+3. The token is verified automatically and stored at `~/.config/mcp-github-push/config.json`.
 
-## Daftarkan ke MCP client
+## Register with your MCP client
 
-Tambahkan ke config MCP client kamu (mis. Claude Desktop `claude_desktop_config.json`):
+Add this to your MCP client config (e.g. Claude Desktop's `claude_desktop_config.json`):
 
 ```json
 {
@@ -79,28 +79,28 @@ Tambahkan ke config MCP client kamu (mis. Claude Desktop `claude_desktop_config.
 }
 ```
 
-Restart client-nya. Tools yang tersedia untuk Claude:
+Restart the client. Tools available to Claude:
 
-| Tool | Fungsi |
+| Tool | Function |
 |---|---|
-| `github_whoami` | Cek token valid & lihat username |
-| `git_sync_workspace` | Clone (kalau belum ada) atau fetch+checkout branch terbaru ke workspace lokal |
-| `git_write_file` | Tulis/timpa satu file dengan isi lengkap — cara utama edit file, tidak butuh diff |
-| `git_delete_file` | Hapus satu file dari workspace lokal |
-| `git_apply_patch` | (Fallback) Terapkan unified diff mentah — rawan gagal kalau diketik ulang manual |
-| `git_status` | Lihat ringkasan file yang berubah, belum di-commit |
-| `git_diff` | Lihat detail diff lengkap di workspace lokal |
-| `git_push` | Commit + push sungguhan — hanya jalan setelah user setuju (`confirmed: true`) |
-| `git_discard_workspace` | Hapus workspace lokal (mis. untuk clone ulang dari awal) |
+| `github_whoami` | Check whether the token is valid and see the username |
+| `git_sync_workspace` | Clone (if not present) or fetch+checkout the latest branch into the local workspace |
+| `git_write_file` | Write/overwrite a single file with full content — the primary way to edit files, no diff needed |
+| `git_delete_file` | Delete a single file from the local workspace |
+| `git_apply_patch` | (Fallback) Apply a raw unified diff — prone to failure if hand-typed |
+| `git_status` | View a summary of changed files, not yet committed |
+| `git_diff` | View the full diff in the local workspace |
+| `git_push` | Actually commit + push — only runs after user approval (`confirmed: true`) |
+| `git_discard_workspace` | Delete the local workspace (e.g. to re-clone from scratch) |
 
-## Perintah CLI lain
+## Other CLI commands
 
 ```bash
-npx @kintil555/mcp-github-push status   # cek token masih valid
-npx @kintil555/mcp-github-push logout   # hapus token tersimpan
+npx @kintil555/mcp-github-push status   # check whether the token is still valid
+npx @kintil555/mcp-github-push logout   # remove the stored token
 ```
 
-## Build dari source
+## Building from source
 
 ```bash
 git clone https://github.com/kintil555/mcp-github-push.git
@@ -109,20 +109,26 @@ npm install
 npm run build
 ```
 
-CI di GitHub Actions otomatis build & type-check tiap push/PR ke `main`, dan publish ke npm saat rilis tag baru dibuat.
+CI on GitHub Actions automatically builds & type-checks every push/PR to `main`, and publishes to npm on new release tags.
 
-## Prasyarat
+## Prerequisites
 
-- **`git` CLI harus terinstall** dan ada di PATH (server ini menjalankan `git` sungguhan, bukan REST API). Cek dengan `git --version`. Kalau belum ada: [git-scm.com/downloads](https://git-scm.com/downloads).
+- **The `git` CLI must be installed** and on your PATH (this server runs real `git`, not a REST API). Check with `git --version`. If missing: [git-scm.com/downloads](https://git-scm.com/downloads).
 
-## Keamanan
+## Performance
 
-- Token disimpan di `~/.config/mcp-github-push/config.json`. Permission `600` diterapkan di Linux/macOS; di Windows mengandalkan permission folder user default (NTFS ACL), bukan `chmod` Unix.
-- Token **tidak pernah** ditulis ke `.git/config` di workspace lokal — hanya disuntikkan sesaat ke proses `git` lewat header HTTP sementara saat fetch/push.
-- Gunakan **fine-grained PAT** yang dibatasi ke repo tertentu, bukan classic token dengan akses penuh.
-- Set masa berlaku token dan rotasi berkala.
-- `git_push` mensyaratkan parameter `confirmed: true` — pastikan MCP client kamu menampilkan tool call untuk ditinjau user sebelum dieksekusi.
+- **Local operations** (`git_status`, `git_diff`, `git_write_file`, `git_delete_file`, `git_apply_patch`) are fast — plain disk I/O and local `git` commands, no network round trip.
+- **Network operations** (`git_sync_workspace`, `git_push`) shell out to real `git` over HTTPS, so speed depends on your connection and repo size — same as running `git clone`/`push` yourself. The proxy adds negligible overhead on top of that.
+- For large repos, the first `git_sync_workspace` (initial clone) is the slowest step; subsequent syncs only fetch new commits.
 
-## Lisensi
+## Security
+
+- Token is stored at `~/.config/mcp-github-push/config.json`. Permission `600` is applied on Linux/macOS; on Windows it relies on default user-folder permissions (NTFS ACL), not Unix `chmod`.
+- The token is **never** written to `.git/config` in the local workspace — it's injected only momentarily into the `git` process via a temporary HTTP header during fetch/push.
+- Use a **fine-grained PAT** scoped to specific repos, not a classic token with full access.
+- Set a token expiry and rotate it periodically.
+- `git_push` requires the `confirmed: true` parameter — make sure your MCP client shows the tool call for user review before executing it.
+
+## License
 
 MIT
