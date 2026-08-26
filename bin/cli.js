@@ -10,32 +10,44 @@ import "../dist/server.js";
 
 const command = process.argv[2];
 
-async function promptHidden(question) {
-  // Input token disembunyikan dari layar terminal (mirip prompt password).
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: stdin, output: stdout });
-    stdout.write(question);
-    const onData = (char) => {
-      char = char.toString();
-      if (char === "\n" || char === "\r" || char === "\u0004") {
-        stdin.removeListener("data", onData);
-      }
-    };
-    stdin.on("data", onData);
-    // @ts-ignore - _writeToOutput dipakai untuk menyembunyikan echo
-    rl._writeToOutput = function (stringToWrite) {
-      if (rl.line.length === 0 || stringToWrite.trim().length === 0 || stringToWrite === "\n") {
-        rl.output.write(stringToWrite);
-      } else {
-        rl.output.write("*");
-      }
-    };
-    rl.question("", (answer) => {
-      rl.close();
-      stdout.write("\n");
-      resolve(answer.trim());
-    });
-  });
+/**
+ * Prompt dengan echo disamarkan jadi '*', memakai SATU readline interface
+ * yang sama dengan prompt lain di setup ini (dilewatkan sebagai argumen).
+ *
+ * Versi sebelumnya membuat readline interface terpisah untuk prompt host,
+ * lalu me-listen stdin secara manual untuk prompt token setelahnya. Dua
+ * consumer stdin yang berbeda itu saling rebutan: readline.question() bisa
+ * membuffer lebih banyak data dari stdin daripada yang dipakainya sendiri,
+ * sehingga sisa input (baris token) tidak pernah sampai ke listener manual
+ * setelahnya -- proses jadi macet menunggu input yang sebenarnya sudah
+ * "termakan". Sekarang seluruh prompt di satu alur setup memakai SATU
+ * readline interface yang sama, jadi tidak ada data yang hilang di antara
+ * prompt satu dengan berikutnya.
+ */
+async function questionHidden(rl, question) {
+  const original = rl._writeToOutput?.bind(rl);
+  rl._writeToOutput = (stringToWrite) => {
+    // Saat user mengetik/paste, readline memanggil ini per karakter (atau
+    // per chunk saat paste) -- tampilkan '*' sebagai gantinya. Prompt teks
+    // itu sendiri dan newline tetap ditulis apa adanya.
+    if (stringToWrite === question || stringToWrite === "\n" || stringToWrite === "\r\n") {
+      rl.output.write(stringToWrite);
+    } else {
+      rl.output.write("*".repeat(stringToWrite.length));
+    }
+  };
+  try {
+    const answer = await rl.question(question);
+    return answer.trim();
+  } finally {
+    // Selalu kembalikan ke perilaku normal, supaya prompt berikutnya (kalau
+    // ada) di readline yang sama tidak ikut ter-mask.
+    if (original) {
+      rl._writeToOutput = original;
+    } else {
+      delete rl._writeToOutput;
+    }
+  }
 }
 
 async function checkGitInstalled() {
@@ -58,17 +70,35 @@ async function runSetup() {
     process.exit(1);
   }
 
+  // GitHub Enterprise host dilewatkan sebagai flag opsional (--host=github.mycompany.com),
+  // BUKAN pertanyaan interaktif terpisah. Node readline (mode question/promise) punya
+  // keterbatasan dikonfirmasi: rl.question() pertama bisa mengonsumsi seluruh buffer
+  // stdin, sehingga rl.question() kedua tidak pernah menerima input -- proses macet
+  // menunggu token yang sebenarnya sudah "termakan" oleh prompt sebelumnya
+  // (nodejs/node#56608). Dengan hanya SATU rl.question() (untuk token), masalah ini
+  // dihindari sepenuhnya, dan tetap didukung 100% untuk kasus paling umum (github.com).
+  const hostArg = process.argv.find((a) => a.startsWith("--host="));
+  const host = hostArg ? hostArg.slice("--host=".length).trim() : "";
+  if (host) {
+    console.log(`Menggunakan GitHub host: ${host}`);
+  }
+
   console.log("Buat Personal Access Token (PAT) di:");
   console.log("  https://github.com/settings/tokens?type=beta");
   console.log('Scope minimal: "Contents" (read & write) pada repo yang ingin dipakai.\n');
+  if (!host) {
+    console.log("(Pakai GitHub Enterprise? Batalkan dengan Ctrl+C, lalu jalankan ulang dengan:");
+    console.log("  mcp-github-push setup --host=github.mycompany.com)\n");
+  }
 
   const rl = createInterface({ input: stdin, output: stdout });
-  const host = await rl.question(
-    "GitHub host [kosongkan untuk github.com, isi jika pakai GitHub Enterprise]: "
-  );
-  rl.close();
+  let token;
+  try {
+    token = await questionHidden(rl, "Masukkan GitHub Personal Access Token: ");
+  } finally {
+    rl.close();
+  }
 
-  const token = await promptHidden("Masukkan GitHub Personal Access Token: ");
   if (!token) {
     console.error("Token kosong, setup dibatalkan.");
     process.exit(1);
@@ -76,7 +106,7 @@ async function runSetup() {
 
   console.log("\nMemverifikasi token...");
   try {
-    const baseUrl = host.trim() ? `https://${host.trim()}/api/v3` : undefined;
+    const baseUrl = host ? `https://${host}/api/v3` : undefined;
     const pusher = new GitHubPusher(token, baseUrl);
     const info = await pusher.whoAmI();
     console.log(`Token valid. Login sebagai: ${info.login}`);
